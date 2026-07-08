@@ -10,11 +10,15 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.math.*
 
 /**
- * Foreground service that walks a straight-line path from start to end,
- * pushing a fresh mock location every tick so other apps see movement.
+ * Foreground service that follows the REAL road route from start to end
+ * (via the free OSRM routing server), pushing a fresh mock location every
+ * second so other apps see the phone driving along the streets.
  */
 class MockService : Service() {
 
@@ -28,7 +32,6 @@ class MockService : Service() {
         const val EX_LOOP = "loop"
         const val CH = "mockroute"
         @Volatile var running = false; private set
-        // live position, read by the UI for status
         @Volatile var curLat = 0.0
         @Volatile var curLng = 0.0
     }
@@ -58,25 +61,70 @@ class MockService : Service() {
         sLat: Double, sLng: Double, eLat: Double, eLng: Double,
         speedKmh: Double, loop: Boolean
     ) {
-        val speedMs = (speedKmh / 3.6)
-        val totalM = haversine(sLat, sLng, eLat, eLng)
-        // one location update per second
-        val steps = max(1, (totalM / max(speedMs, 0.1)).roundToInt())
-        val bearing = bearingBetween(sLat, sLng, eLat, eLng)
+        // Get the real road path (list of lat/lng points). Falls back to a
+        // straight line if the routing server can't be reached.
+        val path = fetchRoute(sLat, sLng, eLat, eLng)
+            ?: listOf(sLat to sLng, eLat to eLng)
+
+        val speedMs = (speedKmh / 3.6).coerceAtLeast(0.1)
 
         do {
-            for (n in 0..steps) {
+            // walk each road segment
+            for (seg in 0 until path.size - 1) {
                 if (!running) break
-                val f = n.toDouble() / steps
-                val lat = sLat + (eLat - sLat) * f
-                val lng = sLng + (eLng - sLng) * f
-                curLat = lat; curLng = lng
-                engine.push(lat, lng, speedMs.toFloat(), bearing)
-                delay(1000)
+                val (aLat, aLng) = path[seg]
+                val (bLat, bLng) = path[seg + 1]
+                val segM = haversine(aLat, aLng, bLat, bLng)
+                val bearing = bearingBetween(aLat, aLng, bLat, bLng)
+                val steps = max(1, (segM / speedMs).roundToInt())
+
+                for (n in 0..steps) {
+                    if (!running) break
+                    val f = n.toDouble() / steps
+                    val lat = aLat + (bLat - aLat) * f
+                    val lng = aLng + (bLng - aLng) * f
+                    curLat = lat; curLng = lng
+                    engine.push(lat, lng, speedMs.toFloat(), bearing)
+                    delay(1000)
+                }
             }
         } while (loop && running)
 
         stopSelf()
+    }
+
+    /** Ask the free OSRM server for the driving route. Returns road points or null. */
+    private suspend fun fetchRoute(
+        sLat: Double, sLng: Double, eLat: Double, eLng: Double
+    ): List<Pair<Double, Double>>? = withContext(Dispatchers.IO) {
+        try {
+            val url = URL(
+                "https://router.project-osrm.org/route/v1/driving/" +
+                        "$sLng,$sLat;$eLng,$eLat?overview=full&geometries=geojson"
+            )
+            val con = (url.openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15000
+                readTimeout = 15000
+                requestMethod = "GET"
+            }
+            val text = con.inputStream.bufferedReader().use { it.readText() }
+            con.disconnect()
+
+            val routes = JSONObject(text).optJSONArray("routes") ?: return@withContext null
+            if (routes.length() == 0) return@withContext null
+            val coords = routes.getJSONObject(0)
+                .getJSONObject("geometry")
+                .getJSONArray("coordinates")
+
+            val out = ArrayList<Pair<Double, Double>>(coords.length())
+            for (k in 0 until coords.length()) {
+                val c = coords.getJSONArray(k)   // [lon, lat]
+                out.add(c.getDouble(1) to c.getDouble(0))
+            }
+            if (out.size >= 2) out else null
+        } catch (e: Exception) {
+            null   // fall back to straight line
+        }
     }
 
     private fun haversine(la1: Double, lo1: Double, la2: Double, lo2: Double): Double {
