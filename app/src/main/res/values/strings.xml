@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">MockRoute</string>
+    <string name="hint_start">Start address</string>
+    <string name="hint_end">End address</string>
+    <string name="hint_speed">Speed (km/h)</string>
+    <string name="loop">Loop route continuously</string>
+    <string name="start">Start moving</string>
+    <string name="stop">Stop</string>
+    <string name="idle">Idle.</string>
+    <string name="stopped">Stopped.</string>
+    <string name="geocoding">Looking up addresses…</string>
+    <string name="geo_fail">Could not find one of the addresses.</string>
+    <string name="running_fmt">Moving:\n(%1$.5f, %2$.5f) → (%3$.5f, %4$.5f)</string>
+    <string name="note">Setup: Developer Options → Select mock location app → MockRoute. Requires location permission. Some apps detect mock locations and may reject them.</string>
+</resources>
